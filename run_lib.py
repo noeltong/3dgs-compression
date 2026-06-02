@@ -7,7 +7,6 @@ import numpy as np
 import torch
 from torch import nn
 from PIL import Image
-from skimage.metrics import peak_signal_noise_ratio, structural_similarity
 
 from models.model import GaussianVolumeCodec
 from utils.data import VolumeBatchSampler, make_volume_bundle
@@ -15,10 +14,16 @@ from utils.optim import get_lr, get_optim
 from utils.utils import (
     TimeCalculator,
     build_coordinate_grid,
+    compute_reconstruction_metrics,
+    denormalize_from_training_scale,
     derive_num_gaussians,
     flatten_volume,
+    map_gradient_consistency_loss,
+    map_projection_loss,
     normalize_volume,
+    project_map,
     read_volume,
+    scale_volume_for_training,
     seed_everything,
 )
 from utils import logger as exp_logger
@@ -39,8 +44,9 @@ def _configure_runtime(config):
 def _load_volume_bundle(config):
     volume, raw_bytes = read_volume(config.data.path)
     normalized_volume, normalization = normalize_volume(volume, config.data.normalize)
+    training_volume = scale_volume_for_training(normalized_volume, config.data.scale_max)
     coords = build_coordinate_grid(normalized_volume.shape, config.data.coord_norm)
-    values = flatten_volume(normalized_volume)
+    values = flatten_volume(training_volume)
     return make_volume_bundle(
         coords=coords,
         values=values,
@@ -49,26 +55,13 @@ def _load_volume_bundle(config):
         raw_bytes=raw_bytes,
         raw_volume=volume.astype(np.float32),
         normalized_volume=normalized_volume.astype(np.float32),
+        training_volume=training_volume.astype(np.float32),
+        scale_max=float(config.data.scale_max),
     )
 
 
 def _compute_psnr(mse):
     return 10.0 * math.log10(1.0 / mse)
-
-
-def _compute_eval_metrics(gt_arr: np.ndarray, pred_arr: np.ndarray):
-    mse = float(((pred_arr - gt_arr) ** 2).mean())
-    mae = float(np.abs(pred_arr - gt_arr).mean())
-    nrmse = float(np.linalg.norm(pred_arr - gt_arr) / (np.linalg.norm(gt_arr) + 1e-8))
-    psnr = float(peak_signal_noise_ratio(gt_arr, pred_arr, data_range=1.0))
-    ssim = float(structural_similarity(gt_arr, pred_arr, data_range=1.0))
-    return {
-        "MSE": mse,
-        "MAE": mae,
-        "NRMSE": nrmse,
-        "SSIM": ssim,
-        "PSNR": psnr,
-    }
 
 
 def _save_grayscale_image(image: np.ndarray, path: Path):
@@ -79,14 +72,6 @@ def _save_grayscale_image(image: np.ndarray, path: Path):
         img = img / denom
     img_u8 = np.clip(np.round(img * 255.0), 0, 255).astype(np.uint8)
     Image.fromarray(img_u8, mode="L").save(path)
-
-
-def _denormalize_prediction(pred_volume: np.ndarray, bundle):
-    if bundle.normalization["mode"] != "minmax":
-        return pred_volume
-    vmin = float(bundle.normalization["vmin"])
-    vmax = float(bundle.normalization["vmax"])
-    return pred_volume * (vmax - vmin + 1e-6) + vmin
 
 
 def _evaluate_model(model, bundle, device, chunk_size):
@@ -124,29 +109,108 @@ def _reconstruct_volume(model, bundle, device, chunk_size):
         for start in range(0, flat_coords.shape[0], chunk_size):
             stop = min(start + chunk_size, flat_coords.shape[0])
             outputs.append(model(flat_coords[start:stop].to(device)).cpu())
-        pred_norm = torch.cat(outputs, dim=0).reshape(bundle.shape).numpy().astype(np.float32)
-    return pred_norm
+        pred_training = torch.cat(outputs, dim=0).reshape(bundle.shape).numpy().astype(np.float32)
+    return pred_training
+
+
+def _sample_map_training_patch(model, bundle, config, device):
+    sample_mode = str(config.training.map_column_sample_mode).lower()
+    if sample_mode != "patch":
+        raise ValueError(f"Unsupported MAP column sample mode: {sample_mode}")
+
+    sample_height = int(config.training.map_column_sample_height)
+    sample_width = int(config.training.map_column_sample_width)
+    if sample_height <= 0 or sample_width <= 0:
+        raise ValueError("MAP column patch dimensions must be positive")
+
+    height, width, depth = bundle.shape
+    if sample_height > height or sample_width > width:
+        raise ValueError(
+            "MAP column patch dimensions exceed the training volume shape: "
+            f"patch=({sample_height}, {sample_width}), shape=({height}, {width}, {depth})"
+        )
+
+    start_x_max = height - sample_height
+    start_y_max = width - sample_width
+    start_x = 0 if start_x_max == 0 else int(torch.randint(0, start_x_max + 1, (1,)).item())
+    start_y = 0 if start_y_max == 0 else int(torch.randint(0, start_y_max + 1, (1,)).item())
+
+    coords_grid = bundle.coords.reshape(height, width, depth, 3)
+    coord_patch = coords_grid[
+        start_x : start_x + sample_height,
+        start_y : start_y + sample_width,
+        :,
+        :,
+    ]
+    pred_patch = model(coord_patch.reshape(-1, 3).to(device)).reshape(
+        sample_height, sample_width, depth
+    )
+    target_patch = torch.from_numpy(
+        bundle.training_volume[
+            start_x : start_x + sample_height,
+            start_y : start_y + sample_width,
+            :,
+        ]
+    ).to(device=device, dtype=pred_patch.dtype)
+    return pred_patch, target_patch
+
+
+def _compute_map_loss_terms(model, bundle, config, device):
+    if str(getattr(config.data, "task", "pam")).lower() != "pam":
+        raise ValueError("MAP-aware loss is currently only supported for PAM data.")
+
+    pred_volume, target_volume = _sample_map_training_patch(model, bundle, config, device)
+
+    projection_mode = str(config.training.map_loss_type).lower()
+    tau = float(config.training.map_softmax_tau)
+    topk = int(config.training.map_topk)
+
+    map_loss = map_projection_loss(
+        pred_volume,
+        target_volume,
+        mode=projection_mode,
+        tau=tau,
+        topk=topk,
+        loss_type="mse",
+    )
+    map_grad_loss = map_gradient_consistency_loss(
+        pred_volume,
+        target_volume,
+        projection_mode=projection_mode,
+        tau=tau,
+        topk=topk,
+        gradient_mode="sobel",
+        loss_type="mse",
+    )
+    pred_map = project_map(pred_volume, mode=projection_mode, tau=tau, topk=topk)
+    target_map = project_map(target_volume, mode=projection_mode, tau=tau, topk=topk)
+    return {
+        "map_loss": map_loss,
+        "map_grad_loss": map_grad_loss,
+        "pred_map_mean": float(pred_map.detach().mean().item()),
+        "target_map_mean": float(target_map.detach().mean().item()),
+        "sampled_columns": int(pred_volume.shape[0] * pred_volume.shape[1]),
+    }
 
 
 def _run_and_save_evaluation(model, bundle, config, device, eval_dir, model_weights_path):
     eval_dir = Path(eval_dir)
     eval_dir.mkdir(parents=True, exist_ok=True)
 
-    pred_norm = _reconstruct_volume(model, bundle, device, config.eval.chunk_size)
+    pred_training = _reconstruct_volume(model, bundle, device, config.eval.chunk_size)
     gt = bundle.raw_volume.astype(np.float32)
-    pred = _denormalize_prediction(pred_norm, bundle)
+    pred = denormalize_from_training_scale(pred_training, bundle.normalization, bundle.scale_max)
 
-    gt_normed = gt / max(float(gt.max()), 1e-8)
-    pred_normed = pred.clip(float(gt.min()), float(gt.max())) / max(float(gt.max()), 1e-8)
-
-    metrics = {"info": _compute_eval_metrics(gt_normed, pred_normed)}
+    info_metrics, gt_normed, pred_normed = compute_reconstruction_metrics(gt, pred)
+    metrics = {"info": info_metrics}
     data_task = str(getattr(config.data, "task", "pam")).lower()
     if data_task != "pam":
         raise ValueError(f"Unsupported data task for evaluation: {data_task}")
 
-    map_gt = np.max(gt_normed, axis=-1)
-    map_pred = np.max(pred_normed, axis=-1)
-    metrics["map"] = _compute_eval_metrics(map_gt, map_pred)
+    map_gt_raw = np.max(gt, axis=-1)
+    map_pred_raw = np.max(pred, axis=-1)
+    map_metrics, map_gt, map_pred = compute_reconstruction_metrics(map_gt_raw, map_pred_raw)
+    metrics["map"] = map_metrics
 
     np.save(eval_dir / "gt_volume.npy", gt)
     np.save(eval_dir / "pred_volume.npy", pred)
@@ -205,6 +269,29 @@ def _save_checkpoint(model, optimizer, scheduler, step, ckpt_dir, name):
     )
 
 
+def _resolve_eval_checkpoint_path(train_workdir, max_steps):
+    ckpt_dir = Path(train_workdir) / "ckpt"
+    best_path = ckpt_dir / "best.pt"
+    if best_path.exists():
+        return best_path
+
+    final_path = ckpt_dir / f"step_{int(max_steps)}.pt"
+    if final_path.exists():
+        return final_path
+
+    step_candidates = []
+    for path in ckpt_dir.glob("step_*.pt"):
+        stem = path.stem
+        try:
+            step_candidates.append((int(stem.split("_", 1)[1]), path))
+        except (IndexError, ValueError):
+            continue
+    if step_candidates:
+        return max(step_candidates, key=lambda item: item[0])[1]
+
+    raise ValueError(f"Checkpoint not found in {ckpt_dir}")
+
+
 def train(config, workdir, train_dir="train"):
     _configure_runtime(config)
     seed_everything(config.seed)
@@ -241,7 +328,33 @@ def train(config, workdir, train_dir="train"):
         batch_values = batch_values.to(device)
 
         preds = model(batch_coords)
-        loss = criterion(preds, batch_values)
+        loss_3d = criterion(preds, batch_values)
+
+        map_loss_active = bool(config.training.map_loss_enable) and (
+            step >= int(config.training.map_loss_start_step)
+        )
+        map_loss = preds.new_zeros(())
+        map_grad_loss = preds.new_zeros(())
+        map_aux_stats = {
+            "pred_map_mean": 0.0,
+            "target_map_mean": 0.0,
+            "sampled_columns": 0,
+        }
+        if map_loss_active:
+            map_terms = _compute_map_loss_terms(model, bundle, config, device)
+            map_loss = map_terms["map_loss"]
+            map_grad_loss = map_terms["map_grad_loss"]
+            map_aux_stats = {
+                "pred_map_mean": map_terms["pred_map_mean"],
+                "target_map_mean": map_terms["target_map_mean"],
+                "sampled_columns": map_terms["sampled_columns"],
+            }
+
+        loss = (
+            loss_3d
+            + float(config.training.map_loss_weight) * map_loss
+            + float(config.training.map_grad_loss_weight) * map_grad_loss
+        )
 
         optimizer.zero_grad(set_to_none=True)
         loss.backward()
@@ -256,6 +369,14 @@ def train(config, workdir, train_dir="train"):
                 {
                     "step": step,
                     "train_loss": float(loss.item()),
+                    "loss_3d": float(loss_3d.item()),
+                    "loss_map": float(map_loss.item()),
+                    "loss_map_grad": float(map_grad_loss.item()),
+                    "loss_total": float(loss.item()),
+                    "map_loss_active": int(map_loss_active),
+                    "pred_map_mean": float(map_aux_stats["pred_map_mean"]),
+                    "target_map_mean": float(map_aux_stats["target_map_mean"]),
+                    "map_sampled_columns": int(map_aux_stats["sampled_columns"]),
                     "lr": get_lr(optimizer),
                     "elapsed": timer.period(),
                     "raw_bytes": budget["raw_bytes"],
@@ -278,7 +399,7 @@ def train(config, workdir, train_dir="train"):
             )
             exp_logger.dumpkvs()
 
-        if step % config.training.eval_freq == 0 or step == config.training.max_steps:
+        if config.training.eval_freq > 0 and step % config.training.eval_freq == 0:
             metrics = _evaluate_model(model, bundle, device, config.eval.chunk_size)
             exp_logger.logkvs({"step": step, **metrics})
             exp_logger.dumpkvs()
@@ -286,8 +407,17 @@ def train(config, workdir, train_dir="train"):
                 best_eval = metrics["eval_loss"]
                 _save_checkpoint(model, optimizer, scheduler, step, ckpt_dir, "best.pt")
 
-        if step % config.training.ckpt_freq == 0 or step == config.training.max_steps:
+        if config.training.ckpt_freq > 0 and step % config.training.ckpt_freq == 0:
             _save_checkpoint(model, optimizer, scheduler, step, ckpt_dir, f"step_{step}.pt")
+
+    _save_checkpoint(
+        model,
+        optimizer,
+        scheduler,
+        config.training.max_steps,
+        ckpt_dir,
+        f"step_{config.training.max_steps}.pt",
+    )
 
     final_eval = _run_and_save_evaluation(
         model=model,
@@ -297,7 +427,24 @@ def train(config, workdir, train_dir="train"):
         eval_dir=run_root / "eval",
         model_weights_path=Path(ckpt_dir) / "model_final_weights.pth",
     )
-    exp_logger.logkvs({"phase": "post_train_eval", **final_eval})
+    final_payload_metrics = _evaluate_model(model, bundle, device, config.eval.chunk_size)
+    if final_payload_metrics["eval_loss"] < best_eval:
+        _save_checkpoint(
+            model,
+            optimizer,
+            scheduler,
+            config.training.max_steps,
+            ckpt_dir,
+            "best.pt",
+        )
+    exp_logger.logkvs(
+        {
+            "phase": "post_train_eval",
+            **final_payload_metrics,
+            **final_eval,
+            "post_train_eval_loss_train_domain": final_payload_metrics["eval_loss"],
+        }
+    )
     exp_logger.dumpkvs()
 
 
@@ -307,9 +454,7 @@ def eval(config, workdir, train_dir="train", eval_dir="eval"):
     train_workdir = os.path.join(workdir, train_dir)
     eval_workdir = os.path.join(workdir, eval_dir)
     os.makedirs(eval_workdir, exist_ok=True)
-    ckpt_path = os.path.join(train_workdir, "ckpt", "best.pt")
-    if not os.path.exists(ckpt_path):
-        raise ValueError(f"Checkpoint not found: {ckpt_path}")
+    ckpt_path = _resolve_eval_checkpoint_path(train_workdir, config.training.max_steps)
 
     exp_logger.configure(dir=eval_workdir, format_strs=["stdout", "log", "json"])
     bundle = _load_volume_bundle(config)

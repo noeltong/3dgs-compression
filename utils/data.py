@@ -14,7 +14,18 @@ class VolumeBatchSampler:
 
 
 class VolumeDataBundle:
-    def __init__(self, coords, values, shape, normalization, raw_bytes, raw_volume, normalized_volume):
+    def __init__(
+        self,
+        coords,
+        values,
+        shape,
+        normalization,
+        raw_bytes,
+        raw_volume,
+        normalized_volume,
+        training_volume,
+        scale_max,
+    ):
         self.coords = coords
         self.values = values
         self.shape = tuple(shape)
@@ -22,9 +33,29 @@ class VolumeDataBundle:
         self.raw_bytes = int(raw_bytes)
         self.raw_volume = raw_volume
         self.normalized_volume = normalized_volume
+        self.training_volume = training_volume
+        self.scale_max = float(scale_max)
 
 
-def make_volume_bundle(coords, values, shape, normalization, raw_bytes, raw_volume, normalized_volume):
+def make_volume_bundle(
+    coords,
+    values,
+    shape,
+    normalization,
+    raw_bytes,
+    raw_volume,
+    normalized_volume,
+    training_volume,
+    scale_max,
+):
     return VolumeDataBundle(
-        coords, values, shape, normalization, raw_bytes, raw_volume, normalized_volume
+        coords,
+        values,
+        shape,
+        normalization,
+        raw_bytes,
+        raw_volume,
+        normalized_volume,
+        training_volume,
+        scale_max,
     )

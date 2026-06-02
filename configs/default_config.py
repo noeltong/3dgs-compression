@@ -8,8 +8,18 @@ def get_config():
     training.batch_size = 2048
     training.max_steps = 20000
     training.log_freq = 100
-    training.eval_freq = 1000
-    training.ckpt_freq = 1000
+    training.eval_freq = -1
+    training.ckpt_freq = -1
+    training.map_loss_enable = False
+    training.map_loss_start_step = 0
+    training.map_loss_type = "hard"
+    training.map_loss_weight = 0.0
+    training.map_grad_loss_weight = 0.0
+    training.map_softmax_tau = 1.0
+    training.map_topk = 8
+    training.map_column_sample_mode = "patch"
+    training.map_column_sample_height = 16
+    training.map_column_sample_width = 16
 
     model = cfg.model = ConfigDict()
     model.name = "gaussian3d"
@@ -26,14 +36,14 @@ def get_config():
     model.intensity_range = 1.0
     model.clip_grad_norm = 1.0
     model.quantizer_overhead_bits = 256
-    model.forward_query_chunk_size = 2048
-    model.forward_gaussian_chunk_size = 4096
+    model.forward_query_chunk_size = 4096
+    model.forward_gaussian_chunk_size = 8192
 
     optim = cfg.optim = ConfigDict()
     optim.optimizer = "adamw"
     optim.schedule = "cosineannealinglr"
     optim.initial_lr = 1e-3
-    optim.weight_decay = 1e-4
+    optim.weight_decay = 0
     optim.min_lr = 1e-5
     optim.warmup_steps = 0
 
@@ -41,6 +51,7 @@ def get_config():
     data.task = "pam"
     data.path = ""
     data.normalize = "minmax"
+    data.scale_max = 128.0
     data.coord_norm = 1.0
 
     eval_cfg = cfg.eval = ConfigDict()
