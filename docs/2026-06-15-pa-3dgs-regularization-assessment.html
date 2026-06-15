@@ -1,0 +1,634 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+  <meta charset="UTF-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1.0">
+  <title>Photoacoustic 3DGS Compression Regularization Assessment</title>
+  <style>
+    :root {
+      --bg: #f3efe4;
+      --paper: #fffdf8;
+      --ink: #1d2623;
+      --muted: #5b665f;
+      --line: #d6cfbf;
+      --accent: #8c3b2f;
+      --accent-soft: #f4ddd4;
+      --good: #2f6f4f;
+      --warn: #9a6a1c;
+      --bad: #8a2f2f;
+      --link: #0f5c78;
+    }
+
+    * {
+      box-sizing: border-box;
+    }
+
+    body {
+      margin: 0;
+      font-family: "Iowan Old Style", "Palatino Linotype", "Book Antiqua", Georgia, serif;
+      background:
+        radial-gradient(circle at top right, rgba(140, 59, 47, 0.08), transparent 28%),
+        linear-gradient(180deg, #f8f3e7 0%, var(--bg) 100%);
+      color: var(--ink);
+      line-height: 1.55;
+    }
+
+    .page {
+      max-width: 1180px;
+      margin: 0 auto;
+      padding: 40px 24px 80px;
+    }
+
+    .hero {
+      background: linear-gradient(135deg, rgba(255, 253, 248, 0.98), rgba(248, 239, 229, 0.96));
+      border: 1px solid var(--line);
+      border-radius: 20px;
+      padding: 32px;
+      box-shadow: 0 16px 50px rgba(29, 38, 35, 0.08);
+    }
+
+    h1, h2, h3 {
+      line-height: 1.2;
+      margin: 0 0 14px;
+      font-weight: 700;
+    }
+
+    h1 {
+      font-size: clamp(2rem, 4vw, 3.2rem);
+      max-width: 14ch;
+    }
+
+    h2 {
+      margin-top: 34px;
+      font-size: 1.55rem;
+      padding-bottom: 8px;
+      border-bottom: 1px solid var(--line);
+    }
+
+    h3 {
+      margin-top: 22px;
+      font-size: 1.1rem;
+    }
+
+    p {
+      margin: 0 0 12px;
+    }
+
+    .meta {
+      color: var(--muted);
+      font-size: 0.96rem;
+      margin-bottom: 18px;
+    }
+
+    .tag-row {
+      display: flex;
+      gap: 10px;
+      flex-wrap: wrap;
+      margin-top: 18px;
+    }
+
+    .tag {
+      display: inline-block;
+      padding: 6px 10px;
+      border-radius: 999px;
+      background: var(--accent-soft);
+      color: var(--accent);
+      font-size: 0.88rem;
+      border: 1px solid rgba(140, 59, 47, 0.18);
+    }
+
+    .note {
+      background: rgba(15, 92, 120, 0.06);
+      border-left: 4px solid var(--link);
+      padding: 14px 16px;
+      margin: 16px 0;
+      border-radius: 10px;
+    }
+
+    .grid {
+      display: grid;
+      grid-template-columns: repeat(auto-fit, minmax(260px, 1fr));
+      gap: 18px;
+      margin-top: 20px;
+    }
+
+    .card {
+      background: var(--paper);
+      border: 1px solid var(--line);
+      border-radius: 16px;
+      padding: 18px;
+      box-shadow: 0 8px 24px rgba(29, 38, 35, 0.05);
+    }
+
+    .card h3 {
+      margin-top: 0;
+    }
+
+    .score {
+      font-family: "SFMono-Regular", Consolas, "Liberation Mono", Menlo, monospace;
+      font-size: 0.9rem;
+      color: var(--muted);
+      margin-top: 6px;
+    }
+
+    .pill {
+      display: inline-block;
+      padding: 3px 8px;
+      border-radius: 999px;
+      font-size: 0.8rem;
+      border: 1px solid transparent;
+    }
+
+    .high {
+      background: rgba(47, 111, 79, 0.12);
+      color: var(--good);
+      border-color: rgba(47, 111, 79, 0.24);
+    }
+
+    .med {
+      background: rgba(154, 106, 28, 0.12);
+      color: var(--warn);
+      border-color: rgba(154, 106, 28, 0.24);
+    }
+
+    .low {
+      background: rgba(138, 47, 47, 0.12);
+      color: var(--bad);
+      border-color: rgba(138, 47, 47, 0.24);
+    }
+
+    table {
+      width: 100%;
+      border-collapse: collapse;
+      margin-top: 18px;
+      background: var(--paper);
+      border: 1px solid var(--line);
+      border-radius: 16px;
+      overflow: hidden;
+      display: block;
+      overflow-x: auto;
+    }
+
+    thead {
+      background: #efe6d3;
+    }
+
+    th, td {
+      text-align: left;
+      padding: 12px 14px;
+      border-bottom: 1px solid var(--line);
+      vertical-align: top;
+      font-size: 0.96rem;
+    }
+
+    th {
+      font-size: 0.88rem;
+      text-transform: uppercase;
+      letter-spacing: 0.04em;
+      color: var(--muted);
+    }
+
+    ul, ol {
+      margin: 10px 0 14px 20px;
+    }
+
+    li {
+      margin-bottom: 8px;
+    }
+
+    code {
+      font-family: "SFMono-Regular", Consolas, "Liberation Mono", Menlo, monospace;
+      font-size: 0.92em;
+      background: rgba(29, 38, 35, 0.06);
+      padding: 0.1em 0.35em;
+      border-radius: 4px;
+    }
+
+    .formula {
+      display: block;
+      margin: 10px 0 12px;
+      padding: 10px 12px;
+      background: rgba(29, 38, 35, 0.04);
+      border: 1px solid var(--line);
+      border-radius: 10px;
+      font-family: "SFMono-Regular", Consolas, "Liberation Mono", Menlo, monospace;
+      overflow-x: auto;
+    }
+
+    .columns {
+      display: grid;
+      grid-template-columns: repeat(auto-fit, minmax(320px, 1fr));
+      gap: 20px;
+    }
+
+    .small {
+      color: var(--muted);
+      font-size: 0.92rem;
+    }
+
+    a {
+      color: var(--link);
+      text-decoration: none;
+    }
+
+    a:hover {
+      text-decoration: underline;
+    }
+
+    .footer {
+      margin-top: 42px;
+      color: var(--muted);
+      font-size: 0.92rem;
+    }
+  </style>
+</head>
+<body>
+  <div class="page">
+    <section class="hero">
+      <div class="meta">Technical assessment for a single-volume photoacoustic 3D Gaussian Splatting compression model • generated June 15, 2026</div>
+      <h1>Regularization Methods for Photoacoustic 3DGS Compression</h1>
+      <p>This report evaluates photoacoustic- and acoustic-motivated regularization methods for a coordinate-based 3D Gaussian Splatting codec that fits a single reconstructed 3D volume from sampled coordinate-intensity pairs. The ranking is optimized for rate-distortion behavior at fixed or near-fixed bit budget, not for unconstrained reconstruction quality alone.</p>
+      <div class="tag-row">
+        <span class="tag">Literature-grounded</span>
+        <span class="tag">PA/PAT/PAM focused</span>
+        <span class="tag">Compression-oriented</span>
+        <span class="tag">Training-only regularization preferred</span>
+      </div>
+    </section>
+
+    <section>
+      <h2>1. Executive Summary</h2>
+      <p>Taking PAT into account, the most promising methods for this codec are the ones that remain physically and statistically sensible for <strong>signed measurement-domain signals</strong> and for <strong>reconstructed image-domain volumes</strong>: <strong>anisotropic or directional TV</strong>, <strong>Gaussian sparsity / pruning regularization</strong>, <strong>directional sparse transforms such as wavelets or curvelets</strong>, <strong>MAP-aware edge or spectral losses</strong> when projected-view quality matters, and <strong>bandwidth / axial spectral regularization</strong>.</p>
+      <p>The common mechanism is simple: under a fixed quantized payload, the model should spend its Gaussian degrees of freedom on vessel boundaries, strong absorbers, and meaningful depth structure rather than on signed cancellations, tiny oscillatory artifacts, or redundant overlapping blobs.</p>
+      <div class="note">
+        <strong>Evidence boundary.</strong> Claims about PA relevance are based on PA/OA/PAT/PAM reconstruction and inverse-problem literature. PAT time-series or sinogram-domain measurements are signed acoustic waveforms; non-negativity is a prior on the reconstructed <code>p0</code> image, not on the measured pressure traces. Claims about compression benefit for this particular coordinate-based Gaussian codec are <strong>model-specific inference</strong> unless explicitly tied to 3DGS compression work.
+      </div>
+    </section>
+
+    <section>
+      <h2>2. Ranked Candidate Methods</h2>
+      <p class="small">Score tuple: <code>(PA relevance, transferability, compression usefulness, implementation ease, safety)</code>, where higher is better and safety means lower oversmoothing or artifact-bias risk.</p>
+      <table>
+        <thead>
+          <tr>
+            <th>Rank</th>
+            <th>Method</th>
+            <th>Score</th>
+            <th>Overall</th>
+            <th>Confidence</th>
+            <th>Assessment</th>
+          </tr>
+        </thead>
+        <tbody>
+          <tr>
+            <td>1</td>
+            <td>Anisotropic / directional TV</td>
+            <td><code>(5,5,4,4,3)</code></td>
+            <td>4.2</td>
+            <td><span class="pill high">High</span></td>
+            <td>Best overall first-line prior after accounting for signed PAT data and vessel-like structure.</td>
+          </tr>
+          <tr>
+            <td>2</td>
+            <td>Gaussian amplitude group sparsity / pruning / quant-aware regularization</td>
+            <td><code>(3,5,5,4,3)</code></td>
+            <td>4.0</td>
+            <td><span class="pill med">Medium</span></td>
+            <td>Best direct rate-distortion lever for this codec; PA support is indirect, but 3DGS compression support is strong.</td>
+          </tr>
+          <tr>
+            <td>3</td>
+            <td>Directional wavelet / curvelet sparsity</td>
+            <td><code>(4,4,4,3,4)</code></td>
+            <td>3.8</td>
+            <td><span class="pill med">Medium</span></td>
+            <td>Fits anisotropic vascular morphology and compressed-sensing PAT literature; good candidate for patchwise penalties.</td>
+          </tr>
+          <tr>
+            <td>4</td>
+            <td>MAP-domain multi-scale gradient / spectral loss</td>
+            <td><code>(3,5,4,5,2)</code></td>
+            <td>3.8</td>
+            <td><span class="pill med">Medium</span></td>
+            <td>Especially relevant for PAM because MAP views dominate interpretation; highly transferable to the current code.</td>
+          </tr>
+          <tr>
+            <td>5</td>
+            <td>Bandwidth / axial spectral regularization</td>
+            <td><code>(5,4,3,4,2)</code></td>
+            <td>3.6</td>
+            <td><span class="pill med">Medium</span></td>
+            <td>Strong acoustic motivation from bandwidth-limited axial resolution; useful if kept soft.</td>
+          </tr>
+          <tr>
+            <td>6</td>
+            <td>Non-negativity / entropy-type positivity prior</td>
+            <td><code>(3,3,3,5,2)</code></td>
+            <td>3.2</td>
+            <td><span class="pill med">Medium</span></td>
+            <td>Conditionally useful only when the training target is a reconstructed <code>p0</code>-like image; not justified for raw PAT sinograms or other signed pressure-domain targets.</td>
+          </tr>
+          <tr>
+            <td>7</td>
+            <td>TGV / higher-order curvature regularization</td>
+            <td><code>(4,4,3,3,3)</code></td>
+            <td>3.4</td>
+            <td><span class="pill med">Medium</span></td>
+            <td>Can preserve piecewise-smooth depth structure better than TV, but easier to over-regularize fine vessels.</td>
+          </tr>
+          <tr>
+            <td>8</td>
+            <td>Depth-aware attenuation / anisotropic z-regularization</td>
+            <td><code>(4,4,3,4,2)</code></td>
+            <td>3.4</td>
+            <td><span class="pill med">Medium</span></td>
+            <td>Physically plausible for PAM/PAT depth behavior, but more suitable as weighting than as a primary loss.</td>
+          </tr>
+          <tr>
+            <td>9</td>
+            <td>Joint intensity + second-derivative sparsity</td>
+            <td><code>(4,4,3,2,3)</code></td>
+            <td>3.2</td>
+            <td><span class="pill low">Low-Med</span></td>
+            <td>Interesting PA-specific reduced-data prior, but more complex and riskier in this codec.</td>
+          </tr>
+          <tr>
+            <td>10</td>
+            <td>Acoustic forward data-consistency loss</td>
+            <td><code>(5,2,3,1,4)</code></td>
+            <td>3.0</td>
+            <td><span class="pill high">High</span></td>
+            <td>Strong physics, weak fit to the current voxel-only setup because it needs raw acoustic measurements and geometry.</td>
+          </tr>
+          <tr>
+            <td>11</td>
+            <td>Vesselness / Hessian tubularity prior</td>
+            <td><code>(4,3,3,2,2)</code></td>
+            <td>2.8</td>
+            <td><span class="pill low">Low-Med</span></td>
+            <td>Can preserve vessels but may hallucinate vessel-like structures and bias morphology.</td>
+          </tr>
+          <tr>
+            <td>12</td>
+            <td>Limited-view directional visibility prior</td>
+            <td><code>(4,2,2,2,3)</code></td>
+            <td>2.6</td>
+            <td><span class="pill low">Low-Med</span></td>
+            <td>Only attractive if the reconstructed training volume still carries strong limited-angle artifacts.</td>
+          </tr>
+          <tr>
+            <td>13</td>
+            <td>Speed-of-sound / detector-response modeling</td>
+            <td><code>(5,1,1,1,4)</code></td>
+            <td>2.4</td>
+            <td><span class="pill high">High</span></td>
+            <td>Important in PAT reconstruction, but poor transfer to voxel-only codec training.</td>
+          </tr>
+          <tr>
+            <td>14</td>
+            <td>Low-rank / nonlocal / dictionary-learning priors</td>
+            <td><code>(2,2,2,2,3)</code></td>
+            <td>2.2</td>
+            <td><span class="pill low">Low</span></td>
+            <td>More natural for multispectral, multiframe, or acquisition-side problems than single static volume compression.</td>
+          </tr>
+        </tbody>
+      </table>
+    </section>
+
+    <section>
+      <h2>3. Top 5 Recommendations</h2>
+      <div class="grid">
+        <article class="card">
+          <h3>1. Anisotropic / Directional TV</h3>
+          <p><strong>Mechanism.</strong> Penalize spatial gradients with directional weighting rather than isotropic smoothing.</p>
+          <p><strong>Photoacoustic relevance.</strong> Vascular PA structure is anisotropic; PAT/OAT reconstruction literature explicitly studies TV-style priors for sparse and noisy acquisition.</p>
+          <p><strong>Literature-backed.</strong> Adaptive anisotropic TV preserved complex vessel boundaries better than TV-L1 in optoacoustic model-based inversion.</p>
+          <p><strong>Model-specific inference.</strong> Mild directional TV should remove small noisy oscillations that otherwise consume Gaussian capacity while keeping elongated vessels sharp.</p>
+          <p><strong>Acts on.</strong> Predicted volume, optionally MAP image.</p>
+          <p><strong>Effects.</strong> PSNR/SSIM: small to moderate gain; vessel preservation: good; equal-quality compression: moderate gain; training stability: good.</p>
+          <p><strong>Risk.</strong> Thin capillaries can be oversmoothed if the weight is too large.</p>
+          <div class="score">Confidence: High</div>
+        </article>
+
+        <article class="card">
+          <h3>2. Gaussian Sparsity / Pruning / Quant-Aware Regularization</h3>
+          <p><strong>Mechanism.</strong> Penalize active amplitudes, encourage redundant Gaussians to die, and favor quantization-friendly parameter distributions.</p>
+          <p><strong>Photoacoustic relevance.</strong> Indirect rather than physics-native.</p>
+          <p><strong>Literature-backed.</strong> 3DGS compression work such as LightGaussian shows pruning and compact parameterization can preserve quality under smaller payloads.</p>
+          <p><strong>Model-specific inference.</strong> This is probably the strongest direct lever on rate-distortion for your codec because fewer active Gaussians mean fewer useful bits spent.</p>
+          <p><strong>Acts on.</strong> Gaussian parameters.</p>
+          <p><strong>Effects.</strong> PSNR: neutral to small gain if paired with better priors; equal-quality compression: high upside; training stability: fair.</p>
+          <p><strong>Risk.</strong> Premature pruning can underfit diffuse or low-contrast absorbers.</p>
+          <div class="score">Confidence: Medium</div>
+        </article>
+
+        <article class="card">
+          <h3>3. Directional Wavelet / Curvelet Sparsity</h3>
+          <p><strong>Mechanism.</strong> Penalize high-frequency transform coefficients, especially in directional frames that match vessel geometry.</p>
+          <p><strong>Photoacoustic relevance.</strong> Curvelet and wavelet sparsity have direct PAT compressed-sensing and reconstruction support.</p>
+          <p><strong>Literature-backed.</strong> PAT works report sparse curvelet representations for image or data domains and better reconstruction from reduced measurements.</p>
+          <p><strong>Model-specific inference.</strong> Patchwise transform sparsity should bias the learned field toward representations that a compact Gaussian basis can model efficiently.</p>
+          <p><strong>Acts on.</strong> Predicted volume patches or MAP patches.</p>
+          <p><strong>Effects.</strong> MAP quality: strong gain potential; vessel preservation: strong if transform matches anatomy; compression: moderate upside.</p>
+          <p><strong>Risk.</strong> Implementation complexity and mismatch when anatomy is not strongly tubular.</p>
+          <div class="score">Confidence: Medium</div>
+        </article>
+
+        <article class="card">
+          <h3>4. MAP Multi-Scale Gradient + Spectral Loss</h3>
+          <p><strong>Mechanism.</strong> Match edges and spectrum in projected MAP images at multiple scales.</p>
+          <p><strong>Photoacoustic relevance.</strong> PAM studies often emphasize MAP views because limited axial resolution makes projection quality operationally important.</p>
+          <p><strong>Literature-backed.</strong> The relevance is indirect; the literature mostly motivates the importance of MAP quality and axial bandwidth rather than this exact loss.</p>
+          <p><strong>Model-specific inference.</strong> This would require adding a new training-only projection loss path if you decide to optimize rate-distortion toward the MAP views users inspect.</p>
+          <p><strong>Acts on.</strong> Projected MAP image.</p>
+          <p><strong>Effects.</strong> MAP quality: strong gain; 3D PSNR: neutral to small gain; compression: small to moderate upside.</p>
+          <p><strong>Risk.</strong> Can produce good-looking MAP projections while slightly harming full 3D fidelity if overweighted.</p>
+          <div class="score">Confidence: Medium</div>
+        </article>
+
+        <article class="card">
+          <h3>5. Bandwidth / Axial Spectral Regularization</h3>
+          <p><strong>Mechanism.</strong> Encourage reconstructed patches to match the target's axial or temporal-frequency content without imposing sign constraints.</p>
+          <p><strong>Photoacoustic relevance.</strong> PAT image quality is strongly shaped by acoustic bandwidth, detector response, and anisotropic axial resolution.</p>
+          <p><strong>Literature-backed.</strong> PAT reconstruction and beamforming literature repeatedly ties axial sharpness and artifact behavior to spectral support and detector bandwidth.</p>
+          <p><strong>Model-specific inference.</strong> A mild spectral prior is more PAT-compatible than positivity when the training targets retain signed or oscillatory structure.</p>
+          <p><strong>Acts on.</strong> Predicted volume patches.</p>
+          <p><strong>Effects.</strong> Axial sharpness: moderate gain; 3D PSNR: small gain potential; compression: modest upside if high-frequency noise is suppressed.</p>
+          <p><strong>Risk.</strong> Overweighting can hallucinate or over-preserve ringing.</p>
+          <div class="score">Confidence: Medium</div>
+        </article>
+      </div>
+      <div class="note">
+        <strong>Conditional method.</strong> Entropy-style positivity remains literature-backed for reconstructed non-negative <code>p0</code> images, but it should not be treated as a generic PAT prior. It is inappropriate for raw PAT sinograms, boundary pressure traces, or other targets where signed oscillations are physically meaningful.
+      </div>
+    </section>
+
+    <section>
+      <h2>4. Probably Worth Trying First</h2>
+      <ul>
+        <li><strong>Directional TV on sampled 3D patches</strong> as the first regularizer that keeps training fully volumetric and stays valid for signed PAT-like targets.</li>
+        <li><strong>Mild Gaussian pruning or dead-Gaussian regularization</strong> after a warm-up period.</li>
+        <li><strong>MAP multi-scale gradient</strong> plus <strong>MAP FFT magnitude matching</strong> if projected-view quality is operationally important.</li>
+        <li><strong>Axial spectral matching</strong> on sampled 3D patches if the target quality bottleneck is depth blur or bandwidth loss.</li>
+      </ul>
+    </section>
+
+    <section>
+      <h2>5. Interesting But High-Risk</h2>
+      <ul>
+        <li><strong>Joint intensity plus second-derivative sparsity</strong> from reduced-data PAT. It is PA-specific and elegant, but the optimization landscape is less forgiving.</li>
+        <li><strong>Vesselness or Hessian-based tubularity loss</strong> on MAP patches. It may preserve vessels, but it can also bias the model toward artificial tubular structures.</li>
+        <li><strong>Curvelet regularization</strong> if transform implementation becomes expensive or unstable.</li>
+        <li><strong>Gaussian repulsion or overlap regularization</strong> to reduce redundant blobs. This is promising but under-validated in PA compression.</li>
+      </ul>
+    </section>
+
+    <section>
+      <h2>6. Probably Not Worth It Here</h2>
+      <ul>
+        <li><strong>Full acoustic forward-model consistency</strong> unless raw time-series data and acquisition geometry are available during codec training.</li>
+        <li><strong>Speed-of-sound heterogeneity or detector-response calibration losses</strong> for the current voxel-only learning setup.</li>
+        <li><strong>Low-rank, nonlocal self-similarity, or dictionary-learning priors</strong> as first-line methods for a single reconstructed volume.</li>
+        <li><strong>Limited-view-specific priors</strong> unless the training volume obviously retains limited-angle artifacts.</li>
+        <li><strong>Soft positivity</strong> when the supervision target is raw PAT pressure data, a PAT sinogram volume, or any reconstruction where signed lobes are part of the desired signal.</li>
+      </ul>
+    </section>
+
+    <section>
+      <h2>7. Concrete Implementation Suggestions</h2>
+      <p>The model already has direct insertion points for training-only losses. The main loss is assembled in <code>run_lib.py</code> around voxel MSE, and Gaussian parameters are also easy to regularize because centers, scales, and intensities are exposed in the model parameter activation path.</p>
+      <div class="columns">
+        <article class="card">
+          <h3>Conditional Positivity for p0-like Targets</h3>
+          <p><strong>Loss.</strong></p>
+          <span class="formula">L_pos = mean(softplus(-V_hat / tau))</span>
+          <p><strong>Plug-in point.</strong> Add to the total loss alongside voxel MSE only when the target semantics are reconstructed non-negative initial pressure.</p>
+          <p><strong>Needs extra data?</strong> No.</p>
+          <p><strong>Best use.</strong> Pair with amplitude sparsity so the model cannot cheaply rely on positive-negative cancellation; do not use it for raw PAT time-series, sinograms, or intentionally bipolar targets.</p>
+        </article>
+
+        <article class="card">
+          <h3>Amplitude Sparsity / Group Sparsity</h3>
+          <p><strong>Loss.</strong></p>
+          <span class="formula">L_group = sum_i |a_i|</span>
+          <p>or</p>
+          <span class="formula">L_group = sum_i sqrt(a_i^2 + eta * ||s_i||_2^2)</span>
+          <p><strong>Plug-in point.</strong> Gaussian parameter regularizer.</p>
+          <p><strong>Needs extra data?</strong> No.</p>
+          <p><strong>Best use.</strong> Warm up without sparsity, then ramp it in.</p>
+        </article>
+
+        <article class="card">
+          <h3>Directional TV</h3>
+          <p><strong>Loss.</strong></p>
+          <span class="formula">L_dTV = lambda_xy * ||grad_xy(V_hat_patch)||_1 + lambda_z * ||d_z(V_hat_patch)||_1</span>
+          <p><strong>Plug-in point.</strong> Sample a dense 3D cube and apply finite differences.</p>
+          <p><strong>Needs extra data?</strong> No.</p>
+          <p><strong>Best use.</strong> Keep weights mild and possibly depth-dependent.</p>
+        </article>
+
+        <article class="card">
+          <h3>MAP Multi-Scale Gradient + Spectrum</h3>
+          <p><strong>Loss.</strong></p>
+          <span class="formula">L_map = sum_s w_s ||grad(M(D_s(V_hat))) - grad(M(D_s(V)))||_1 + lambda_f ||log(1 + |F(M(V_hat))|) - log(1 + |F(M(V))|)||_1</span>
+          <p><strong>Plug-in point.</strong> Add a new training-only projection branch if you choose to optimize projected views.</p>
+          <p><strong>Needs extra data?</strong> No.</p>
+          <p><strong>Best use.</strong> Only worth adding if you intentionally expand the objective beyond pure voxelwise reconstruction.</p>
+        </article>
+
+        <article class="card">
+          <h3>Wavelet / Curvelet Sparsity</h3>
+          <p><strong>Loss.</strong></p>
+          <span class="formula">L_wav = lambda * sum_highpass |W(V_hat_patch)|</span>
+          <p><strong>Plug-in point.</strong> Apply to 3D patches or MAP patches.</p>
+          <p><strong>Needs extra data?</strong> No.</p>
+          <p><strong>Best use.</strong> Start with wavelets before curvelets for implementation simplicity.</p>
+        </article>
+
+        <article class="card">
+          <h3>Axial Spectral Matching</h3>
+          <p><strong>Loss.</strong></p>
+          <span class="formula">L_zfft = ||omega(k_z) * (|F_z(V_hat_patch)| - |F_z(V_patch)|)||_1</span>
+          <p><strong>Plug-in point.</strong> Dense 3D patch branch.</p>
+          <p><strong>Needs extra data?</strong> No.</p>
+          <p><strong>Best use.</strong> Use a tapered mid/high-frequency weight rather than uniformly penalizing all frequencies.</p>
+        </article>
+      </div>
+      <div class="note">
+        <strong>Code-fit note.</strong> The current training loop is pure voxelwise reconstruction. New regularizers remain mechanically straightforward: add volume or projection loss terms beside voxel MSE, and add Gaussian-parameter penalties from the parameter tensors before backpropagation. The only one that needs target-semantic gating is positivity, because it is valid for reconstructed <code>p0</code>-like images but not for signed PAT measurement-domain targets.
+      </div>
+    </section>
+
+    <section>
+      <h2>8. Gaps in the Literature</h2>
+      <ul>
+        <li>There is very little direct literature on <strong>rate-distortion-aware regularization for single-volume implicit PA codecs</strong>.</li>
+        <li>Most PA regularization studies operate on <strong>raw acoustic measurements with an explicit forward operator</strong>, not on already reconstructed volumes.</li>
+        <li>The applicability of non-negativity depends strongly on <strong>target semantics</strong>: reconstructed <code>p0</code> images differ materially from signed PAT pressure time-series or sinogram-domain data.</li>
+        <li>There is almost no published work combining <strong>photoacoustic physics priors with Gaussian-primitive sparsity and quantization</strong>.</li>
+        <li>PAM papers often optimize <strong>visualization or segmentation quality</strong>, not payload efficiency under a strict bit budget.</li>
+        <li>I did not find strong evidence that low-rank, dictionary, or nonlocal priors are especially attractive for this exact static single-volume compression setting.</li>
+      </ul>
+    </section>
+
+    <section>
+      <h2>9. Bibliography with Links</h2>
+      <ol>
+        <li>Hauptmann, Tarvainen. <em>Model-based reconstructions for quantitative imaging in photoacoustic tomography</em> (2023). <a href="https://arxiv.org/abs/2311.15735">https://arxiv.org/abs/2311.15735</a></li>
+        <li>Groehl et al. <em>Deep learning for biomedical photoacoustic imaging: A review</em> (2020). <a href="https://arxiv.org/abs/2011.02744">https://arxiv.org/abs/2011.02744</a></li>
+        <li>Prakash et al. <em>Maximum entropy based non-negative optoacoustic tomographic image reconstruction</em> (2017). <a href="https://arxiv.org/abs/1707.08391">https://arxiv.org/abs/1707.08391</a></li>
+        <li>Hannukainen et al. <em>Efficient inclusion of total variation type priors in quantitative photoacoustic tomography</em> (2015). <a href="https://arxiv.org/abs/1512.02796">https://arxiv.org/abs/1512.02796</a></li>
+        <li>Biton et al. <em>Optoacoustic Model-Based Inversion Using Anisotropic Adaptive Total-Variation Regularization</em> (2019). <a href="https://arxiv.org/abs/1908.02825">https://arxiv.org/abs/1908.02825</a></li>
+        <li>Boink et al. <em>A Framework for Directional and Higher-Order Reconstruction in Photoacoustic Tomography</em> (2017). <a href="https://arxiv.org/abs/1707.02245">https://arxiv.org/abs/1707.02245</a></li>
+        <li>Pan et al. <em>Photoacoustic Reconstruction Using Sparsity in Curvelet Frame: Image versus Data Domain</em> (2020). <a href="https://arxiv.org/abs/2011.13080">https://arxiv.org/abs/2011.13080</a></li>
+        <li>Betcke et al. <em>Acoustic Wave Field Reconstruction from Compressed Measurements with Application in Photoacoustic Tomography</em> (2016). <a href="https://arxiv.org/abs/1609.02763">https://arxiv.org/abs/1609.02763</a></li>
+        <li>Haltmeier et al. <em>Compressed sensing and sparsity in photoacoustic tomography</em> (2016). <a href="https://arxiv.org/abs/1605.09249">https://arxiv.org/abs/1605.09249</a></li>
+        <li>Sandbichler et al. <em>A Novel Compressed Sensing Scheme for Photoacoustic Tomography</em> (2015). <a href="https://arxiv.org/abs/1501.04305">https://arxiv.org/abs/1501.04305</a></li>
+        <li>Rejesh et al. <em>Photo-acoustic tomographic image reconstruction from reduced data using physically inspired regularization</em> (2019). <a href="https://arxiv.org/abs/1908.02313">https://arxiv.org/abs/1908.02313</a></li>
+        <li>Haltmeier et al. <em>Iterative Methods for Photoacoustic Tomography in Attenuating Acoustic Media</em> (2017). <a href="https://arxiv.org/abs/1704.07422">https://arxiv.org/abs/1704.07422</a></li>
+        <li>Huang et al. <em>Full-Wave Iterative Image Reconstruction in Photoacoustic Tomography with Acoustically Inhomogeneous Media</em> (2013). <a href="https://arxiv.org/abs/1303.5680">https://arxiv.org/abs/1303.5680</a></li>
+        <li>Suhonen et al. <em>Reconstructing initial pressure and speed of sound distributions simultaneously in photoacoustic tomography</em> (2025). <a href="https://arxiv.org/abs/2505.08482">https://arxiv.org/abs/2505.08482</a></li>
+        <li>Yang et al. <em>A Learning-based Framework for Spatial Impulse Response Compensation in 3D Photoacoustic Computed Tomography</em> (2026). <a href="https://arxiv.org/abs/2601.20291">https://arxiv.org/abs/2601.20291</a></li>
+        <li>Yu, Li. <em>Improving Axial Resolution of Optical Resolution Photoacoustic Microscopy with Advanced Frequency Domain Eigenspace Based Minimum Variance Beamforming Method</em> (2023). <a href="https://arxiv.org/abs/2309.09409">https://arxiv.org/abs/2309.09409</a></li>
+        <li>Cai et al. <em>Photoacoustic Imaging Based on AlN MF-PMUT with Broadened Bandwidth</em> (2022). <a href="https://arxiv.org/abs/2203.16806">https://arxiv.org/abs/2203.16806</a></li>
+        <li>Sulistyawan et al. <em>Implicit Spatiotemporal Bandwidth Enhancement Filter by Sine-activated Deep Learning Model for Fast 3D Photoacoustic Tomography</em> (2025). <a href="https://arxiv.org/abs/2507.20575">https://arxiv.org/abs/2507.20575</a></li>
+        <li>Zhang et al. <em>Hessian filter-assisted FDHM segmentation and quantification method for optical-resolution photoacoustic microscopy</em> (2022). <a href="https://arxiv.org/abs/2205.12555">https://arxiv.org/abs/2205.12555</a></li>
+        <li>Fan et al. <em>LightGaussian: Unbounded 3D Gaussian Compression with 15x Reduction and 200+ FPS</em> (2023). <a href="https://arxiv.org/abs/2311.17245">https://arxiv.org/abs/2311.17245</a></li>
+      </ol>
+    </section>
+
+    <section>
+      <h2>10. Prioritized Experimental Plan</h2>
+      <div class="columns">
+        <article class="card">
+          <h3>Three Easiest First</h3>
+          <ol>
+            <li>Directional TV plus mild amplitude sparsity.</li>
+            <li>Gaussian group sparsity or dead-Gaussian regularization after warm-up.</li>
+            <li>MAP spectral loss or axial spectral loss on sampled patches.</li>
+          </ol>
+        </article>
+
+        <article class="card">
+          <h3>Two Highest-Upside</h3>
+          <ol>
+            <li>Directional wavelet or curvelet sparsity.</li>
+            <li>Gaussian group sparsity plus mild redundancy reduction.</li>
+          </ol>
+        </article>
+
+        <article class="card">
+          <h3>Two to Avoid for Now</h3>
+          <ol>
+            <li>Full acoustic forward-model consistency.</li>
+            <li>Soft positivity on raw PAT or other signed-pressure targets.</li>
+          </ol>
+        </article>
+      </div>
+    </section>
+
+    <p class="footer">Prepared for the photoacoustic 3D Gaussian Splatting compression model in <code>pam-compression-3dgs</code>. This document is intended as a design and experiment-planning artifact rather than a publication-ready review.</p>
+  </div>
+</body>
+</html>

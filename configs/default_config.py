@@ -10,16 +10,6 @@ def get_config():
     training.log_freq = 100
     training.eval_freq = -1
     training.ckpt_freq = -1
-    training.map_loss_enable = False
-    training.map_loss_start_step = 0
-    training.map_loss_type = "hard"
-    training.map_loss_weight = 0.0
-    training.map_grad_loss_weight = 0.0
-    training.map_softmax_tau = 1.0
-    training.map_topk = 8
-    training.map_column_sample_mode = "patch"
-    training.map_column_sample_height = 16
-    training.map_column_sample_width = 16
 
     model = cfg.model = ConfigDict()
     model.name = "gaussian3d"
