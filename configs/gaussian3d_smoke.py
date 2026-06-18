@@ -14,5 +14,10 @@ def get_config():
     cfg.training.patch_batch_size = 1
     cfg.training.patch_size = (8, 8, 8)
     cfg.training.patch_lambda_grad = 0.05
+    cfg.training.realloc_enable = True
+    cfg.training.realloc_interval = 1
+    cfg.training.realloc_start_step = 1
+    cfg.training.realloc_end_step = 2
+    cfg.training.realloc_fraction = 0.05
     cfg.eval.chunk_size = 256
     return cfg

@@ -18,6 +18,11 @@ def get_config():
     training.patch_grad_alpha_y = 1.0
     training.patch_grad_alpha_z = 1.0
     training.patch_grad_delta = 1.0
+    training.realloc_enable = False
+    training.realloc_interval = 500
+    training.realloc_start_step = 1000
+    training.realloc_end_step = 8000
+    training.realloc_fraction = 0.05
 
     model = cfg.model = ConfigDict()
     model.name = "gaussian3d"

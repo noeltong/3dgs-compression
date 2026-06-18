@@ -96,6 +96,7 @@ class GaussianVolumeCodec(nn.Module):
 
         init_scale = float(overrides.get("init_scale", _get_config_value(config, "init_scale", 0.15)))
         init_scale = min(max(init_scale, self.min_scale), self.max_scale)
+        self.init_scale = init_scale
         scale_offset = max(init_scale - self.min_scale, self.eps)
         raw_scale_init = _inverse_softplus(scale_offset)
 
@@ -136,6 +137,56 @@ class GaussianVolumeCodec(nn.Module):
             "scales": scales,
             "intensities": intensities,
         }
+
+    def get_activated_parameter_tensors(self) -> Dict[str, torch.Tensor]:
+        return self._activated_parameters()
+
+    def inverse_center_parameterization(self, centers: torch.Tensor) -> torch.Tensor:
+        clamped_centers = centers.clamp(min=-0.999999, max=0.999999)
+        return torch.atanh(clamped_centers)
+
+    def inverse_scale_parameterization(self, scales: torch.Tensor) -> torch.Tensor:
+        clamped_scales = scales.clamp(min=self.min_scale, max=self.max_scale)
+        target_offset = (clamped_scales - self.min_scale).clamp_min(self.eps)
+        return torch.log(torch.expm1(target_offset))
+
+    def inverse_intensity_parameterization(self, intensities: torch.Tensor) -> torch.Tensor:
+        clamped_intensities = intensities.clamp(min=-self.intensity_range, max=self.intensity_range)
+        normalized = (clamped_intensities / self.intensity_range).clamp(min=-0.999999, max=0.999999)
+        return torch.atanh(normalized)
+
+    def overwrite_gaussian_rows_(
+        self,
+        indices: torch.Tensor,
+        center_logits: torch.Tensor,
+        raw_scales: torch.Tensor,
+        intensity_logits: torch.Tensor,
+    ) -> None:
+        if indices.ndim != 1:
+            raise ValueError("indices must be a 1D tensor.")
+        num_rows = indices.shape[0]
+        if center_logits.shape != (num_rows, 3):
+            raise ValueError("center_logits must have shape [num_rows, 3].")
+        if raw_scales.shape != (num_rows, 3):
+            raise ValueError("raw_scales must have shape [num_rows, 3].")
+        if intensity_logits.shape != (num_rows, 1):
+            raise ValueError("intensity_logits must have shape [num_rows, 1].")
+
+        param_device = self.center_logits.device
+        row_indices = indices.to(device=param_device, dtype=torch.long)
+        with torch.no_grad():
+            self.center_logits[row_indices] = center_logits.to(
+                device=param_device,
+                dtype=self.center_logits.dtype,
+            )
+            self.raw_scales[row_indices] = raw_scales.to(
+                device=param_device,
+                dtype=self.raw_scales.dtype,
+            )
+            self.intensity_logits[row_indices] = intensity_logits.to(
+                device=param_device,
+                dtype=self.intensity_logits.dtype,
+            )
 
     def _quantized_parameters(self, use_ste: bool) -> Dict[str, torch.Tensor]:
         params = self._activated_parameters()

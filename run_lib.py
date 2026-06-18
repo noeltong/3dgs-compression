@@ -104,16 +104,129 @@ def _evaluate_model(model, bundle, device, chunk_size):
         }
 
 
+def _predict_flat_training_volume(model, bundle, device, chunk_size):
+    outputs = []
+    flat_coords = bundle.coords.reshape(-1, 3)
+    for start in range(0, flat_coords.shape[0], chunk_size):
+        stop = min(start + chunk_size, flat_coords.shape[0])
+        outputs.append(model(flat_coords[start:stop].to(device)).cpu())
+    return torch.cat(outputs, dim=0)
+
+
 def _reconstruct_volume(model, bundle, device, chunk_size):
     model.eval()
     with torch.inference_mode():
-        outputs = []
-        flat_coords = bundle.coords.reshape(-1, 3)
-        for start in range(0, flat_coords.shape[0], chunk_size):
-            stop = min(start + chunk_size, flat_coords.shape[0])
-            outputs.append(model(flat_coords[start:stop].to(device)).cpu())
-        pred_training = torch.cat(outputs, dim=0).reshape(bundle.shape).numpy().astype(np.float32)
+        pred_training = _predict_flat_training_volume(model, bundle, device, chunk_size).reshape(bundle.shape)
+        pred_training = pred_training.numpy().astype(np.float32)
     return pred_training
+
+
+def _should_run_reallocation(step, training_config):
+    if not training_config.realloc_enable:
+        return False
+    if step < training_config.realloc_start_step:
+        return False
+    if step > training_config.realloc_end_step:
+        return False
+    return step % training_config.realloc_interval == 0
+
+
+def _make_zero_reallocation_metrics():
+    return {
+        "realloc_event": 0,
+        "realloc_num_pruned": 0,
+        "realloc_num_respawned": 0,
+        "realloc_score_mean_pruned": 0.0,
+        "realloc_score_mean_kept": 0.0,
+        "realloc_residual_mean_selected": 0.0,
+    }
+
+
+def _compute_reallocation_prune_count(num_gaussians, realloc_fraction):
+    num_gaussians = int(num_gaussians)
+    if num_gaussians <= 1:
+        raise ValueError("Reallocation requires at least 2 Gaussians to preserve the fixed budget.")
+    prune_count = int(math.floor(float(realloc_fraction) * float(num_gaussians)))
+    prune_count = max(1, prune_count)
+    prune_count = min(prune_count, num_gaussians - 1)
+    if prune_count <= 0:
+        raise ValueError("Reallocation prune count must be positive.")
+    return prune_count
+
+
+def _reset_optimizer_rows_(optimizer, parameter, row_indices):
+    state = optimizer.state.get(parameter)
+    if not state:
+        return
+    for tensor in state.values():
+        if tensor is None or not torch.is_tensor(tensor):
+            continue
+        if tensor.ndim == 0:
+            continue
+        if tensor.shape[0] != parameter.shape[0]:
+            continue
+        tensor_row_indices = row_indices.to(device=tensor.device, dtype=torch.long)
+        tensor[tensor_row_indices] = 0
+
+
+def _run_reallocation_step(model, optimizer, bundle, device, config):
+    params = model.get_activated_parameter_tensors()
+    intensities = params["intensities"].abs().reshape(-1)
+    scales = params["scales"]
+    scores = intensities * scales.prod(dim=-1)
+
+    num_gaussians = model.num_gaussians
+    prune_count = _compute_reallocation_prune_count(num_gaussians, config.training.realloc_fraction)
+
+    prune_order = torch.argsort(scores, descending=False)
+    prune_indices = prune_order[:prune_count]
+    keep_indices = prune_order[prune_count:]
+
+    model.eval()
+    with torch.inference_mode():
+        preds = _predict_flat_training_volume(model, bundle, device, config.eval.chunk_size)
+    model.train()
+
+    targets = bundle.values.reshape(-1, 1)
+    residuals = (preds - targets).abs().reshape(-1)
+    selected_coord_indices = torch.topk(residuals, k=prune_count, largest=True, sorted=True).indices
+    respawn_coords = bundle.coords[selected_coord_indices].to(device=device, dtype=model.center_logits.dtype)
+    gt_values = targets[selected_coord_indices].to(device=device, dtype=model.intensity_logits.dtype)
+    pred_values = preds[selected_coord_indices].to(device=device, dtype=model.intensity_logits.dtype)
+    signed_residuals = (gt_values - pred_values).clamp(
+        min=-model.intensity_range,
+        max=model.intensity_range,
+    )
+
+    init_scale_value = min(max(model.init_scale, model.min_scale), model.max_scale)
+    respawn_scales = torch.full(
+        (prune_count, 3),
+        fill_value=init_scale_value,
+        device=device,
+        dtype=model.raw_scales.dtype,
+    )
+
+    center_logits = model.inverse_center_parameterization(respawn_coords)
+    raw_scales = model.inverse_scale_parameterization(respawn_scales)
+    intensity_logits = model.inverse_intensity_parameterization(signed_residuals)
+    model.overwrite_gaussian_rows_(prune_indices, center_logits, raw_scales, intensity_logits)
+
+    optimizer_indices = prune_indices.to(device=model.center_logits.device, dtype=torch.long)
+    _reset_optimizer_rows_(optimizer, model.center_logits, optimizer_indices)
+    _reset_optimizer_rows_(optimizer, model.raw_scales, optimizer_indices)
+    _reset_optimizer_rows_(optimizer, model.intensity_logits, optimizer_indices)
+
+    pruned_scores = scores[prune_indices]
+    kept_scores = scores[keep_indices]
+    selected_residuals = residuals[selected_coord_indices]
+    return {
+        "realloc_event": 1,
+        "realloc_num_pruned": int(prune_count),
+        "realloc_num_respawned": int(prune_count),
+        "realloc_score_mean_pruned": float(pruned_scores.mean().item()),
+        "realloc_score_mean_kept": float(kept_scores.mean().item()),
+        "realloc_residual_mean_selected": float(selected_residuals.mean().item()),
+    }
 
 
 def _run_and_save_evaluation(model, bundle, config, device, eval_dir, model_weights_path):
@@ -286,17 +399,24 @@ def train(config, workdir, train_dir="train"):
         optimizer.step()
         scheduler.step()
 
+        realloc_metrics = _make_zero_reallocation_metrics()
+        if _should_run_reallocation(step, config.training):
+            realloc_metrics = _run_reallocation_step(model, optimizer, bundle, device, config)
+
+        train_log = {
+            "step": step,
+            "train_loss": float(loss.item()),
+            "loss_3d": float(loss_3d.item()),
+            "loss_grad_patch": float(loss_grad_patch.item()),
+            "loss_total": float(loss.item()),
+            "lr": get_lr(optimizer),
+            "elapsed": timer.period(),
+            **realloc_metrics,
+        }
         if step % config.training.log_freq == 0 or step == 1:
             payload = model.get_payload_stats()
-            exp_logger.logkvs(
+            train_log.update(
                 {
-                    "step": step,
-                    "train_loss": float(loss.item()),
-                    "loss_3d": float(loss_3d.item()),
-                    "loss_grad_patch": float(loss_grad_patch.item()),
-                    "loss_total": float(loss.item()),
-                    "lr": get_lr(optimizer),
-                    "elapsed": timer.period(),
                     "raw_bytes": budget["raw_bytes"],
                     "target_bytes": budget["target_bytes"],
                     "target_bits": budget["target_bits"],
@@ -315,7 +435,8 @@ def train(config, workdir, train_dir="train"):
                     ),
                 }
             )
-            exp_logger.dumpkvs()
+        exp_logger.logkvs(train_log)
+        exp_logger.dumpkvs()
 
         if config.training.eval_freq > 0 and step % config.training.eval_freq == 0:
             metrics = _evaluate_model(model, bundle, device, config.eval.chunk_size)
