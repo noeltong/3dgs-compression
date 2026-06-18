@@ -10,6 +10,14 @@ def get_config():
     training.log_freq = 100
     training.eval_freq = -1
     training.ckpt_freq = -1
+    training.patch_loss_enable = False
+    training.patch_batch_size = 2
+    training.patch_size = (8, 8, 8)
+    training.patch_lambda_grad = 0.05
+    training.patch_grad_alpha_x = 1.0
+    training.patch_grad_alpha_y = 1.0
+    training.patch_grad_alpha_z = 1.0
+    training.patch_grad_delta = 1.0
 
     model = cfg.model = ConfigDict()
     model.name = "gaussian3d"

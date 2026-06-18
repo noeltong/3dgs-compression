@@ -8,8 +8,9 @@ import torch
 from torch import nn
 from PIL import Image
 
+from models.losses import HyperbolaGradientPatchLoss
 from models.model import GaussianVolumeCodec
-from utils.data import VolumeBatchSampler, make_volume_bundle
+from utils.data import VolumeBatchSampler, VolumePatchSampler, make_volume_bundle
 from utils.optim import get_lr, get_optim
 from utils.utils import (
     TimeCalculator,
@@ -42,11 +43,16 @@ def _load_volume_bundle(config):
     volume, raw_bytes = read_volume(config.data.path)
     normalized_volume, normalization = normalize_volume(volume, config.data.normalize)
     training_volume = scale_volume_for_training(normalized_volume, config.data.scale_max)
-    coords = build_coordinate_grid(normalized_volume.shape, config.data.coord_norm)
+    coord_volume = build_coordinate_grid(normalized_volume.shape, config.data.coord_norm).reshape(
+        *normalized_volume.shape, 3
+    )
+    coords = coord_volume.reshape(-1, 3)
     values = flatten_volume(training_volume)
     return make_volume_bundle(
         coords=coords,
+        coord_volume=coord_volume,
         values=values,
+        value_volume=torch.from_numpy(training_volume.astype(np.float32)),
         shape=normalized_volume.shape,
         normalization=normalization,
         raw_bytes=raw_bytes,
@@ -235,6 +241,21 @@ def train(config, workdir, train_dir="train"):
     optimizer, scheduler = get_optim(model, config)
     criterion = nn.MSELoss()
     sampler = VolumeBatchSampler(bundle.coords, bundle.values, config.training.batch_size)
+    patch_loss_fn = HyperbolaGradientPatchLoss(
+        lambda_grad=config.training.patch_lambda_grad,
+        alpha_x=config.training.patch_grad_alpha_x,
+        alpha_y=config.training.patch_grad_alpha_y,
+        alpha_z=config.training.patch_grad_alpha_z,
+        delta=config.training.patch_grad_delta,
+    )
+    patch_sampler = None
+    if config.training.patch_loss_enable:
+        patch_sampler = VolumePatchSampler(
+            bundle.coord_volume,
+            bundle.value_volume,
+            config.training.patch_size,
+            config.training.patch_batch_size,
+        )
     timer = TimeCalculator()
 
     best_eval = float("inf")
@@ -246,7 +267,17 @@ def train(config, workdir, train_dir="train"):
 
         preds = model(batch_coords)
         loss_3d = criterion(preds, batch_values)
-        loss = loss_3d
+        loss_grad_patch = loss_3d.new_zeros(())
+        if patch_sampler is not None:
+            patch_coords, patch_values = patch_sampler.next()
+            patch_coords = patch_coords.to(device)
+            patch_values = patch_values.to(device)
+            patch_preds = model.reconstruct_dense(
+                patch_coords,
+                chunk_size=config.model.forward_query_chunk_size,
+            ).permute(0, 4, 1, 2, 3)
+            loss_grad_patch = patch_loss_fn.gradient_loss(patch_preds, patch_values)
+        loss = loss_3d + config.training.patch_lambda_grad * loss_grad_patch
 
         optimizer.zero_grad(set_to_none=True)
         loss.backward()
@@ -262,6 +293,7 @@ def train(config, workdir, train_dir="train"):
                     "step": step,
                     "train_loss": float(loss.item()),
                     "loss_3d": float(loss_3d.item()),
+                    "loss_grad_patch": float(loss_grad_patch.item()),
                     "loss_total": float(loss.item()),
                     "lr": get_lr(optimizer),
                     "elapsed": timer.period(),
